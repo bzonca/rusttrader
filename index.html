@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Trader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles-rust.css" id="theme-stylesheet" />
+    <style>
+        /* Override some styles for Electron app */
+        body {
+            -webkit-app-region: no-drag;
+            user-select: none;
+        }
+        
+        .app-layout {
+            position: relative;
+        }
+        
+        /* Button styles from original */
+        .btn--primary, .btn--secondary {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn--primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+            color: var(--bg-0);
+        }
+        
+        .btn--primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(var(--primary-rgb), 0.3);
+        }
+        
+        .btn--secondary {
+            background: var(--bg-3);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        
+        .btn--secondary:hover {
+            background: var(--surface-elevated);
+            border-color: var(--border-light);
+        }
+        
+        /* Pairing modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: var(--bg-2);
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            margin-bottom: 20px;
+        }
+        
+        .modal-header h2 {
+            color: var(--text);
+            margin: 0;
+        }
+        
+        .modal-close {
+            float: right;
+            font-size: 28px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            line-height: 20px;
+        }
+        
+        .pairing-status {
+            margin: 20px 0;
+            padding: 15px;
+            background: var(--bg-1);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        
+        .pairing-output {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Setup State (shown when no credentials) -->
+<div id="setupState" class="fullscreen-state" style="display: none;">
+    <div class="login-container">
+        <h1 style="font-size: 3rem; margin-bottom: 20px;">Rust Trader</h1>
+        <p style="color: #9e9e9e; margin-bottom: 40px; font-size: 1.2rem;">
+            Setup Required - Generate FCM Credentials
+        </p>
+        
+        <div id="credentialStatus" style="margin-bottom: 20px;">
+            <p id="credentialStatusText">No credentials found</p>
+        </div>
+        
+        <button id="generateBtn" class="btn btn-primary" onclick="generateCredentials()">
+            Generate Credentials
+        </button>
+    </div>
+</div>
+
+<!-- Main App Layout -->
+<div id="appState" class="app-layout" style="display: none;">
+
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-menu-toggle" onclick="toggleMobileSidebar()" aria-label="Toggle menu">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+    </button>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="mobileSidebar">
+        <div class="sidebar-header">
+            <div class="logo-section">
+                <h2 class="sidebar-title">Rust Trader</h2>
+                <p class="sidebar-subtitle">Live Market Tracker</p>
+            </div>
+        </div>
+
+        <div class="sidebar-section-title">YOUR SERVERS</div>
+
+        <div class="sidebar-content">
+            <div id="serverList" class="server-list">
+                <!-- Servers will be populated here -->
+            </div>
+
+            <button class="add-server-btn" onclick="openPairingModal()">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <span>Add Server</span>
+            </button>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <div class="user-details">
+                    <div id="sidebarUsername" class="username">Local User</div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <select id="themeSelector" onchange="changeTheme(this.value)" class="btn btn-sm" style="flex: 1; cursor: pointer;">
+                            <option value="rust">Rust Theme</option>
+                            <option value="retro">Retro CRT</option>
+                            <option value="modern">Modern</option>
+                        </select>
+                        <button class="btn btn-sm" onclick="openCredentialsModal()">Settings</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+
+        <!-- No Server Selected State -->
+        <div id="noServerState" class="empty-state">
+            <div class="empty-state-content">
+                <div class="empty-state-icon">
+                    <svg width="80" height="80" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+                        <path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h1>Welcome to Rust Trader</h1>
+                <p class="empty-state-description">
+                    Connect to your Rust server to track vending machines and find the best deals in real-time.
+                </p>
+                <button class="btn btn-primary" onclick="openPairingModal()">
+                    Pair Your First Server
+                </button>
+            </div>
+        </div>
+
+        <!-- Server Selected State -->
+        <div id="serverSelectedState" style="display: none;">
+            <!-- Header with server info and filters -->
+            <div class="header-with-filters">
+                <div class="server-header">
+                    <div class="server-info">
+                        <h1 id="serverName">Server Name</h1>
+                        <div class="server-stats">
+                            <span class="stat-item">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="2"/>
+                                    <circle cx="9" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                                <span id="playerCount">0/0</span>
+                            </span>
+                            <span class="stat-item">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M3 9h18" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                                <span id="serverSize">0</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filters Section -->
+                <div class="filters">
+                    <h2 class="section-title">Search & Filter</h2>
+                    
+                    <div class="filter-grid">
+                        <div class="input-group">
+                            <label>Search Item</label>
+                            <input type="text" id="searchItem" placeholder="e.g. Metal, Wood, Scrap" oninput="filterShops()">
+                        </div>
+                        <div class="input-group">
+                            <label>Currency Filter</label>
+                            <input type="text" id="currencyFilter" placeholder="e.g. Scrap, HQM" oninput="filterShops()">
+                        </div>
+                        <div class="input-group">
+                            <label>Shop Name</label>
+                            <input type="text" id="shopNameFilter" placeholder="e.g. Mini Mart" oninput="filterShops()">
+                        </div>
+                    </div>
+
+                    <div class="filter-actions">
+                        <div class="input-group">
+                            <label>Sort By</label>
+                            <select id="sortBy" onchange="filterShops()">
+                                <option value="name">Item Name (A-Z)</option>
+                                <option value="price">Price (Low to High)</option>
+                                <option value="price_desc">Price (High to Low)</option>
+                                <option value="stock">Stock (Most Available)</option>
+                                <option value="distance">Distance (Nearest First)</option>
+                            </select>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="hideOutOfStock" onchange="filterShops()">
+                            <label for="hideOutOfStock">Hide Out of Stock</label>
+                        </div>
+                        <button onclick="refreshVendingData()" class="btn--secondary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="stats">
+                    <div class="stat-card">
+                        <div class="stat-value" id="totalShops">0</div>
+                        <div class="stat-label">Total Shops</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="totalItems">0</div>
+                        <div class="stat-label">Items Listed</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="matchingItems">0</div>
+                        <div class="stat-label">Matching Items</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <div id="loadingVending" class="loading-state" style="display: none;">
+                <div class="spinner"></div>
+                <p>Loading vending machines...</p>
+            </div>
+
+            <!-- Items List -->
+            <div class="shops-container">
+                <div id="shopsList"></div>
+            </div>
+
+            <!-- No Items State -->
+            <div id="noItemsState" class="empty-state" style="display: none;">
+                <p>No vending machines found on this server</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Pairing Modal -->
+<div id="pairingModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <span class="modal-close" onclick="closePairingModal()">&times;</span>
+            <h2>Pair New Server</h2>
+        </div>
+        
+        <div class="pairing-status">
+            <p>Open the Rust+ app on your phone and pair with a server to connect it here.</p>
+            <button id="startListeningBtn" class="btn btn-primary" onclick="startListening()">
+                Start Listening
+            </button>
+            <button id="stopListeningBtn" class="btn btn-danger" onclick="stopListening()" style="display: none;">
+                Stop Listening
+            </button>
+        </div>
+        
+        <div id="pairingOutput" class="pairing-output" style="display: none;">
+            <!-- Pairing output will appear here -->
+        </div>
+    </div>
+</div>
+
+<!-- Credentials Modal -->
+<div id="credentialsModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <span class="modal-close" onclick="closeCredentialsModal()">&times;</span>
+            <h2>FCM Credentials</h2>
+        </div>
+        
+        <div class="pairing-status">
+            <p id="credModalStatus">Checking credentials...</p>
+            <pre id="credModalContent" style="margin-top: 15px; background: var(--bg-0); padding: 10px; border-radius: 4px; font-size: 11px;"></pre>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <button class="btn btn-danger" onclick="deleteCredentials()">Delete Credentials</button>
+            <button class="btn btn-secondary" onclick="closeCredentialsModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// Theme switching functionality
+function changeTheme(theme) {
+    const stylesheet = document.getElementById('theme-stylesheet');
+    const themeFiles = {
+        'rust': './styles-rust.css',
+        'retro': './styles-retro.css',
+        'modern': './styles.css'
+    };
+    
+    if (themeFiles[theme]) {
+        stylesheet.href = themeFiles[theme];
+        localStorage.setItem('selectedTheme', theme);
+    }
+}
+
+// Load saved theme on startup
+window.addEventListener('DOMContentLoaded', () => {
+    const savedTheme = localStorage.getItem('selectedTheme') || 'rust';
+    const themeSelector = document.getElementById('themeSelector');
+    if (themeSelector) {
+        themeSelector.value = savedTheme;
+        changeTheme(savedTheme);
+    }
+});
+
+// Mobile menu toggle function
+function toggleMobileSidebar() {
+    const sidebar = document.getElementById('mobileSidebar');
+    sidebar.classList.toggle('mobile-open');
+}
+</script>
+
+<script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,737 @@
+// renderer.js - UI Logic for Rust Trader with Server Management
+
+let currentCredentials = null;
+let servers = [];
+let currentServer = null;
+let isListening = false;
+let vendingData = null;
+let currentCategory = 'all';
+let ITEM_NAMES = {};  // Will be loaded from Corrosion Hour data
+let playerPosition = null;  // Store player position for distance calculations
+let mapSize = 4000;  // Store map size from server
+
+// DEBUG: Global function to inspect a specific shop by name
+window.debugShop = function(shopName) {
+    if (!vendingData || !vendingData.vendingMachines) {
+        console.error('No vending data loaded. Please refresh vending machines first.');
+        return;
+    }
+    
+    const shop = vendingData.vendingMachines.find(m => 
+        m.name.toLowerCase().includes(shopName.toLowerCase())
+    );
+    
+    if (!shop) {
+        console.error(`Shop containing "${shopName}" not found.`);
+        console.log('Available shops:', vendingData.vendingMachines.map(m => m.name));
+        return;
+    }
+    
+    console.log('=== SHOP DEBUG ===');
+    console.log('Shop name:', shop.name);
+    console.log('Shop object:', shop);
+    console.log('Shop keys:', Object.keys(shop));
+    
+    if (shop.sellOrders && shop.sellOrders.length > 0) {
+        console.log('\nAll sell orders:');
+        shop.sellOrders.forEach((order, idx) => {
+            console.log(`\nOrder ${idx + 1}:`);
+            console.log(JSON.stringify(order, null, 2));
+        });
+        console.log('\nOrder keys:', Object.keys(shop.sellOrders[0]));
+    }
+    console.log('==================');
+};
+
+// Initialize on load
+window.addEventListener('DOMContentLoaded', async () => {
+    // Load item names first
+    await loadItemNames();
+    await checkSetup();
+});
+
+// Load item names from main process (fetched from Corrosion Hour)
+async function loadItemNames() {
+    try {
+        ITEM_NAMES = await window.electronAPI.getItemNames();
+        console.log(`[ITEMS] Loaded ${Object.keys(ITEM_NAMES).length} item names`);
+        
+        // If we don't have many items, try to refresh
+        if (Object.keys(ITEM_NAMES).length < 100) {
+            console.log('[ITEMS] Item count seems low, attempting refresh...');
+            const result = await window.electronAPI.refreshItemData();
+            if (result.success) {
+                ITEM_NAMES = await window.electronAPI.getItemNames();
+                console.log(`[ITEMS] Refreshed to ${Object.keys(ITEM_NAMES).length} items`);
+            }
+        }
+    } catch (error) {
+        console.error('[ITEMS] Failed to load item names:', error);
+        ITEM_NAMES = {};
+    }
+}
+
+// Check initial setup
+async function checkSetup() {
+    const hasCredentials = await window.electronAPI.checkCredentials();
+    
+    if (!hasCredentials) {
+        // Show setup state
+        document.getElementById('setupState').style.display = 'flex';
+        document.getElementById('appState').style.display = 'none';
+    } else {
+        // Show app state
+        document.getElementById('setupState').style.display = 'none';
+        document.getElementById('appState').style.display = 'flex';
+        
+        // Load credentials
+        currentCredentials = await window.electronAPI.getCredentials();
+        
+        // Load servers
+        await loadServers();
+    }
+}
+
+// Generate FCM credentials
+async function generateCredentials() {
+    const generateBtn = document.getElementById('generateBtn');
+    const statusText = document.getElementById('credentialStatusText');
+    
+    try {
+        generateBtn.disabled = true;
+        generateBtn.textContent = 'Generating...';
+        statusText.textContent = 'Generating credentials...';
+        
+        const credentials = await window.electronAPI.generateCredentials();
+        
+        if (credentials) {
+            statusText.textContent = 'Credentials generated successfully!';
+            setTimeout(() => {
+                checkSetup();
+            }, 1500);
+        } else {
+            throw new Error('Failed to generate credentials');
+        }
+    } catch (error) {
+        console.error('Error generating credentials:', error);
+        statusText.textContent = 'Failed to generate credentials: ' + error.message;
+    } finally {
+        generateBtn.disabled = false;
+        generateBtn.textContent = 'Generate Credentials';
+    }
+}
+
+// Load saved servers
+async function loadServers() {
+    servers = await window.electronAPI.getServers();
+    renderServerList();
+    
+    // If no servers, show empty state
+    if (servers.length === 0) {
+        showNoServerState();
+    }
+}
+
+// Render server list in sidebar
+function renderServerList() {
+    const serverList = document.getElementById('serverList');
+    serverList.innerHTML = '';
+    
+    servers.forEach(server => {
+        const serverItem = document.createElement('div');
+        serverItem.className = 'server-item' + (currentServer?.id === server.id ? ' active' : '');
+        serverItem.onclick = () => selectServer(server);
+        
+        serverItem.innerHTML = `
+            <div class="server-item-info">
+                <div class="server-item-name">${server.serverName}</div>
+                <div class="server-item-ip">${server.serverIp}:${server.appPort}</div>
+            </div>
+            <button class="server-delete-btn" onclick="event.stopPropagation(); deleteServer('${server.id}')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" 
+                          stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        `;
+        
+        serverList.appendChild(serverItem);
+    });
+}
+
+// Select a server
+async function selectServer(server) {
+    currentServer = server;
+    
+    // Update active state in sidebar
+    document.querySelectorAll('.server-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    
+    // Find and highlight the current server item
+    const serverItems = document.querySelectorAll('.server-item');
+    serverItems.forEach(item => {
+        if (item.onclick && item.onclick.toString().includes(server.id)) {
+            item.classList.add('active');
+        }
+    });
+    
+    // Show server state
+    document.getElementById('noServerState').style.display = 'none';
+    document.getElementById('serverSelectedState').style.display = 'block';
+    
+    // Update server name
+    document.getElementById('serverName').textContent = server.serverName;
+    
+    // Load vending data
+    await loadVendingData();
+}
+
+// Load vending machine data
+async function loadVendingData() {
+    if (!currentServer) return;
+    
+    // Show loading
+    document.getElementById('loadingVending').style.display = 'flex';
+    document.querySelector('.shops-container').style.display = 'none';
+    document.getElementById('noItemsState').style.display = 'none';
+    
+    try {
+        const result = await window.electronAPI.getVendingData(currentServer);
+        
+        if (result.success) {
+            vendingData = result;
+            
+            // Store map size and player position for calculations
+            mapSize = result.mapSize || 4000;
+            playerPosition = result.playerPosition || null;
+            
+            console.log('[VENDING] Map size:', mapSize);
+            console.log('[PLAYER] Position:', playerPosition);
+            
+            // DEBUG: Log first 5 shops to see NPC vs player shop data structure
+            if (result.vendingMachines && result.vendingMachines.length > 0) {
+                console.log('=== SHOP DATA DEBUG (First 5 shops) ===');
+                result.vendingMachines.slice(0, 5).forEach((machine, idx) => {
+                    console.log(`\n--- Shop ${idx + 1}: ${machine.name} ---`);
+                    console.log('Shop object keys:', Object.keys(machine));
+                    console.log('Number of sell orders:', machine.sellOrders?.length || 0);
+                    
+                    if (machine.sellOrders && machine.sellOrders.length > 0) {
+                        console.log('First sell order (full):');
+                        console.log(JSON.stringify(machine.sellOrders[0], null, 2));
+                        console.log('Sell order keys:', Object.keys(machine.sellOrders[0]));
+                    }
+                });
+                console.log('\n=== END SHOP DATA DEBUG ===\n');
+            }
+            
+            // Update server info
+            if (result.serverInfo) {
+                document.getElementById('playerCount').textContent = 
+                    `${result.serverInfo.players}/${result.serverInfo.maxPlayers}`;
+                document.getElementById('serverSize').textContent = 
+                    `${result.serverInfo.size}`;
+            }
+            
+            // Render vending machines
+            renderVendingMachines(result.vendingMachines);
+        } else {
+            throw new Error(result.error || 'Failed to connect to server');
+        }
+    } catch (error) {
+        console.error('Error loading vending data:', error);
+        document.querySelector('.shops-container').innerHTML = `
+            <div class="error-message" style="padding: 20px; color: var(--danger); text-align: center;">
+                Failed to connect to server: ${error.message}
+            </div>
+        `;
+        document.querySelector('.shops-container').style.display = 'block';
+    } finally {
+        document.getElementById('loadingVending').style.display = 'none';
+    }
+}
+
+// Render vending machines and their items
+function renderVendingMachines(machines) {
+    const shopsList = document.getElementById('shopsList');
+    const shopsContainer = document.querySelector('.shops-container');
+    
+    if (!shopsList) {
+        console.error('shopsList element not found!');
+        return;
+    }
+    
+    shopsList.innerHTML = '';
+    
+    if (!machines || machines.length === 0) {
+        document.getElementById('noItemsState').style.display = 'block';
+        shopsContainer.style.display = 'none';
+        updateStats(0, 0, 0);
+        return;
+    }
+    
+    document.getElementById('noItemsState').style.display = 'none';
+    shopsContainer.style.display = 'block';
+    
+    // Process all items from all machines
+    const allItems = [];
+    let totalShops = 0;
+    
+    machines.forEach(machine => {
+        if (machine.sellOrders && machine.sellOrders.length > 0) {
+            totalShops++;
+            machine.sellOrders.forEach(order => {
+                // Calculate distance if player position is available
+                let distance = null;
+                if (playerPosition) {
+                    const dx = machine.x - playerPosition.x;
+                    const dy = machine.y - playerPosition.y;
+                    distance = Math.sqrt(dx * dx + dy * dy);
+                }
+                
+                allItems.push({
+                    ...order,
+                    machineName: machine.name,
+                    machineId: machine.id,
+                    x: machine.x,
+                    y: machine.y,
+                    distance: distance
+                });
+            });
+        }
+    });
+    
+    console.log(`Rendering ${allItems.length} items from ${totalShops} shops`);
+    
+    // Create header
+    const header = `
+        <div class="list-header">
+            <div>Item</div>
+            <div>Cost</div>
+            <div>Stock</div>
+            <div>Shop</div>
+            <div>Location</div>
+            <div>Distance</div>
+        </div>
+    `;
+    
+    // Create rows
+    const rows = allItems.map(item => {
+        // Handle undefined/null stock values - default to 0
+        const stock = item.amountInStock ?? 0;
+        const outOfStock = stock === 0;
+        const itemName = getItemName(item.itemId);
+        const currencyName = getItemName(item.currencyId);
+        const gridPos = getGridPosition(item.x, item.y);
+        const distanceText = item.distance !== null && item.distance !== undefined 
+            ? `${Math.round(item.distance)}m` 
+            : '-';
+        
+        return `
+            <div class="shop-row ${outOfStock ? 'out-of-stock' : ''}" 
+                 data-item="${itemName.toLowerCase()}"
+                 data-currency="${currencyName.toLowerCase()}"
+                 data-shop="${item.machineName.toLowerCase()}"
+                 data-stock="${stock}"
+                 data-price="${item.costPerItem}"
+                 data-distance="${item.distance || Infinity}"
+                 data-original-display="">
+                <div class="sale">
+                    <span>${item.quantity > 1 ? `${item.quantity}x ` : ''}${itemName}</span>
+                </div>
+                <div class="cost">
+                    <span>${item.costPerItem} ${currencyName}</span>
+                </div>
+                <div class="stock">${stock}</div>
+                <div class="shop-name">${item.machineName}</div>
+                <div class="location">${gridPos}</div>
+                <div class="distance">${distanceText}</div>
+            </div>
+        `;
+    }).join('');
+    
+    shopsList.innerHTML = header + rows;
+    
+    // Make sure the container is visible
+    shopsContainer.style.display = 'block';
+    
+    // Update stats
+    updateStats(totalShops, allItems.length, allItems.length);
+    
+    // Apply any existing filters after rendering
+    filterShops();
+}
+
+// Get grid position from coordinates
+function getGridPosition(worldX, worldY) {
+    const gridSize = 150;  // Correct grid size for Rust
+    const grids = Math.ceil(mapSize / gridSize);
+    
+    // worldX and worldY are already in world coordinates (from -mapSize/2 to +mapSize/2)
+    // Convert to grid coordinates
+    const adjustedX = worldX + (mapSize / 2);
+    const adjustedY = worldY + (mapSize / 2);
+    
+    const gridX = Math.floor(adjustedX / gridSize);
+    const gridZ = Math.floor((mapSize - adjustedY) / gridSize);
+    
+    const clampedX = Math.max(0, Math.min(grids - 1, gridX));
+    const clampedZ = Math.max(0, Math.min(grids - 1, gridZ));
+    
+    // Convert number to letter (A, B, C, ..., Z, AA, AB, etc.)
+    function numberToLetter(num) {
+        let result = '';
+        while (num >= 0) {
+            result = String.fromCharCode(65 + (num % 26)) + result;
+            num = Math.floor(num / 26) - 1;
+            if (num < 0) break;
+        }
+        return result || 'A';
+    }
+    
+    return `${numberToLetter(clampedX)}${clampedZ}`;
+}
+
+// Update stats display
+function updateStats(shops, items, matching) {
+    document.getElementById('totalShops').textContent = shops;
+    document.getElementById('totalItems').textContent = items;
+    document.getElementById('matchingItems').textContent = matching;
+}
+
+// Filter shops based on all filters
+function filterShops() {
+    const searchItem = document.getElementById('searchItem').value.toLowerCase();
+    const currencyFilter = document.getElementById('currencyFilter').value.toLowerCase();
+    const shopNameFilter = document.getElementById('shopNameFilter').value.toLowerCase();
+    const hideOutOfStock = document.getElementById('hideOutOfStock').checked;
+    const sortBy = document.getElementById('sortBy').value;
+    
+    const rows = document.querySelectorAll('.shop-row');
+    let visibleCount = 0;
+    
+    // First, reset all rows to their original state
+    rows.forEach(row => {
+        // Reset display to empty string (not 'block') to respect original display value
+        row.style.display = '';
+    });
+    
+    // Then filter rows
+    rows.forEach(row => {
+        const itemName = row.dataset.item || '';
+        const currency = row.dataset.currency || '';
+        const shopName = row.dataset.shop || '';
+        const stock = parseInt(row.dataset.stock) || 0;
+        
+        const matchesItem = !searchItem || itemName.includes(searchItem);
+        const matchesCurrency = !currencyFilter || currency.includes(currencyFilter);
+        const matchesShop = !shopNameFilter || shopName.includes(shopNameFilter);
+        const hasStock = !hideOutOfStock || stock > 0;
+        
+        if (matchesItem && matchesCurrency && matchesShop && hasStock) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // Sort visible rows
+    sortShops(sortBy);
+    
+    // Update matching items count
+    document.getElementById('matchingItems').textContent = visibleCount;
+}
+
+// Sort shops
+function sortShops(sortBy) {
+    const container = document.getElementById('shopsList');
+    const header = container.querySelector('.list-header');
+    const rows = Array.from(container.querySelectorAll('.shop-row'));
+    
+    // Sort all rows, not just visible ones
+    rows.sort((a, b) => {
+        switch(sortBy) {
+            case 'name':
+                return a.dataset.item.localeCompare(b.dataset.item);
+            case 'price':
+                return parseInt(a.dataset.price) - parseInt(b.dataset.price);
+            case 'price_desc':
+                return parseInt(b.dataset.price) - parseInt(a.dataset.price);
+            case 'stock':
+                // Sort by stock with out of stock (0) items at the bottom
+                const stockA = parseInt(a.dataset.stock) || 0;
+                const stockB = parseInt(b.dataset.stock) || 0;
+                if (stockA === 0 && stockB === 0) return 0;
+                if (stockA === 0) return 1;
+                if (stockB === 0) return -1;
+                return stockB - stockA;
+            case 'distance':
+                // Sort by distance (closest first)
+                const distA = parseFloat(a.dataset.distance) || Infinity;
+                const distB = parseFloat(b.dataset.distance) || Infinity;
+                return distA - distB;
+            default:
+                return 0;
+        }
+    });
+    
+    // Clear container and re-add sorted elements
+    container.innerHTML = '';
+    container.appendChild(header);
+    rows.forEach(row => container.appendChild(row));
+}
+
+// Delete a server
+async function deleteServer(serverId) {
+    if (!confirm('Are you sure you want to delete this server?')) return;
+    
+    const result = await window.electronAPI.deleteServer(serverId);
+    if (result.success) {
+        servers = result.servers;
+        renderServerList();
+        
+        if (currentServer?.id === serverId) {
+            currentServer = null;
+            showNoServerState();
+        }
+    }
+}
+
+// Show no server state
+function showNoServerState() {
+    document.getElementById('noServerState').style.display = 'flex';
+    document.getElementById('serverSelectedState').style.display = 'none';
+}
+
+// Refresh vending data
+function refreshVendingData() {
+    if (currentServer) {
+        loadVendingData();
+        // Filters will be reapplied automatically after data loads
+    }
+}
+
+// Toggle mobile sidebar
+function toggleMobileSidebar() {
+    const sidebar = document.getElementById('mobileSidebar');
+    sidebar.classList.toggle('mobile-open');
+}
+
+// ========== PAIRING MODAL ==========
+
+function openPairingModal() {
+    document.getElementById('pairingModal').classList.add('active');
+}
+
+function closePairingModal() {
+    document.getElementById('pairingModal').classList.remove('active');
+    if (isListening) {
+        stopListening();
+    }
+}
+
+async function startListening() {
+    if (!currentCredentials) {
+        alert('No credentials available. Please regenerate credentials.');
+        return;
+    }
+    
+    const startBtn = document.getElementById('startListeningBtn');
+    const stopBtn = document.getElementById('stopListeningBtn');
+    const pairingOutput = document.getElementById('pairingOutput');
+    
+    try {
+        isListening = true;
+        
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+        pairingOutput.style.display = 'block';
+        
+        pairingOutput.innerHTML = '<div style="color: #00ff88;">✓ Starting FCM listener...</div>';
+        
+        // Set up event listener for pairing updates
+        window.electronAPI.onPairingUpdate(async (data) => {
+            console.log('Pairing update received:', data);
+            
+            if (data.type === 'listening-started') {
+                pairingOutput.innerHTML += '<div style="margin-top: 10px;">Waiting for pairing notification from Rust+ app...</div>';
+            } else if (data.type === 'pairing-received') {
+                pairingOutput.innerHTML += '<div style="color: #00ff88; margin-top: 20px;">✓ Server paired!</div>';
+                pairingOutput.innerHTML += '<pre style="margin-top: 10px;">' + 
+                    JSON.stringify(data.data, null, 2) + '</pre>';
+                
+                // Save the server
+                const result = await window.electronAPI.saveServer(data.data);
+                if (result.success) {
+                    servers = result.servers;
+                    renderServerList();
+                    
+                    setTimeout(() => {
+                        closePairingModal();
+                        // Select the newly added server
+                        const newServer = servers.find(s => 
+                            s.serverIp === data.data.serverIp && 
+                            s.appPort === data.data.appPort
+                        );
+                        if (newServer) {
+                            selectServer(newServer);
+                        }
+                    }, 1500);
+                }
+            }
+        });
+        
+        // Start the actual FCM listener
+        await window.electronAPI.startPairingListener(currentCredentials);
+        
+    } catch (error) {
+        console.error('Error starting listener:', error);
+        alert('Failed to start pairing listener: ' + error.message);
+        stopListening();
+    }
+}
+
+async function stopListening() {
+    const startBtn = document.getElementById('startListeningBtn');
+    const stopBtn = document.getElementById('stopListeningBtn');
+    const pairingOutput = document.getElementById('pairingOutput');
+    
+    isListening = false;
+    
+    try {
+        await window.electronAPI.stopPairingListener();
+        window.electronAPI.removePairingListeners();
+    } catch (error) {
+        console.error('Error stopping listener:', error);
+    }
+    
+    startBtn.style.display = 'inline-block';
+    stopBtn.style.display = 'none';
+    
+    pairingOutput.innerHTML += '<div style="color: #ff3366; margin-top: 10px;">✗ Listening stopped</div>';
+}
+
+// ========== CREDENTIALS MODAL ==========
+
+async function openCredentialsModal() {
+    document.getElementById('credentialsModal').classList.add('active');
+    
+    const status = document.getElementById('credModalStatus');
+    const content = document.getElementById('credModalContent');
+    
+    if (currentCredentials) {
+        status.textContent = 'FCM Credentials Active';
+        const displayCreds = {
+            steamId: currentCredentials.steamId || 'Not found',
+            gcm: currentCredentials.gcm ? 'Present' : 'Missing',
+            fcm: currentCredentials.fcm ? 'Present' : 'Missing',
+            expo: currentCredentials.expo ? 'Present' : 'Missing'
+        };
+        content.textContent = JSON.stringify(displayCreds, null, 2);
+    } else {
+        status.textContent = 'No credentials found';
+        content.textContent = '';
+    }
+}
+
+function closeCredentialsModal() {
+    document.getElementById('credentialsModal').classList.remove('active');
+}
+
+async function deleteCredentials() {
+    if (!confirm('Are you sure you want to delete your FCM credentials? You will need to regenerate them and re-pair all servers.')) {
+        return;
+    }
+    
+    try {
+        await window.electronAPI.deleteCredentials();
+        currentCredentials = null;
+        alert('Credentials deleted. The app will now restart setup.');
+        checkSetup();
+    } catch (error) {
+        console.error('Error deleting credentials:', error);
+        alert('Failed to delete credentials');
+    }
+}
+
+// ========== ITEM DATA HELPERS ==========
+
+// Get item name from the loaded Corrosion Hour data
+function getItemName(itemId) {
+    const id = String(itemId);
+    if (ITEM_NAMES[id]) {
+        return ITEM_NAMES[id].name || ITEM_NAMES[id];
+    }
+    return `Unknown Item (${id})`;
+}
+
+// Get item icon name for the image URL
+function getItemIcon(itemId) {
+    const id = String(itemId);
+    if (ITEM_NAMES[id]) {
+        // Use the short name if available, otherwise convert the display name
+        const item = ITEM_NAMES[id];
+        const shortName = item.short || item.name;
+        
+        // Convert to URL-friendly format for Corrosion Hour icons
+        return shortName.toLowerCase()
+            .replace(/\s+/g, '-')
+            .replace(/\./g, '-')
+            .replace(/[^a-z0-9-]/g, '')
+            .replace(/-+/g, '-')
+            .trim();
+    }
+    return 'scrap'; // Default icon
+}
+
+// Get item category for filtering
+function getItemCategory(itemId) {
+    const name = getItemName(itemId).toLowerCase();
+    
+    // Categorize based on item name patterns
+    if (name.includes('wood') || name.includes('stone') || name.includes('metal') || 
+        name.includes('sulfur') || name.includes('cloth') || name.includes('leather') ||
+        name.includes('scrap') || name.includes('oil') || name.includes('fuel') ||
+        name.includes('charcoal') || name.includes('bone')) {
+        return 'resources';
+    }
+    
+    if (name.includes('rifle') || name.includes('pistol') || name.includes('shotgun') ||
+        name.includes('bow') || name.includes('smg') || name.includes('ak') ||
+        name.includes('lr') || name.includes('mp5') || name.includes('thompson') ||
+        name.includes('revolver') || name.includes('python') || name.includes('m92') ||
+        name.includes('spas') || name.includes('l96')) {
+        return 'weapons';
+    }
+    
+    if (name.includes('ammo') || name.includes('bullet') || name.includes('arrow') ||
+        name.includes('rocket') || name.includes('shell') || name.includes('slug')) {
+        return 'ammo';
+    }
+    
+    if (name.includes('pickaxe') || name.includes('hatchet') || name.includes('hammer') ||
+        name.includes('jackhammer') || name.includes('chainsaw') || name.includes('salvaged')) {
+        return 'tools';
+    }
+    
+    if (name.includes('gear') || name.includes('spring') || name.includes('pipe') ||
+        name.includes('blade') || name.includes('body') || name.includes('tech') ||
+        name.includes('rope') || name.includes('tarp') || name.includes('sewing')) {
+        return 'components';
+    }
+    
+    if (name.includes('bandage') || name.includes('syringe') || name.includes('medkit') ||
+        name.includes('medical')) {
+        return 'medical';
+    }
+    
+    if (name.includes('helmet') || name.includes('jacket') || name.includes('boots') ||
+        name.includes('gloves') || name.includes('pants') || name.includes('hoodie') ||
+        name.includes('shirt') || name.includes('armor') || name.includes('mask')) {
+        return 'clothing';
+    }
+    
+    return 'other';
+}

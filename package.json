@@ -1,0 +1,26 @@
+{
+  "name": "rust-trader-electron",
+  "version": "1.0.0",
+  "description": "Rust Trader - Local Electron App for Rust+ Server Pairing",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "patch-package"
+  },
+  "keywords": [
+    "rust",
+    "rustplus",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^27.0.0",
+    "patch-package": "^8.0.0"
+  },
+  "dependencies": {
+    "@liamcottle/rustplus.js": "^2.5.0",
+    "@liamcottle/push-receiver": "^0.0.4",
+    "cheerio": "^1.0.0"
+  }
+}
