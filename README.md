@@ -19,7 +19,7 @@ Rust Trader is an Electron-based desktop app that connects to your Rust servers 
 
 ## Screenshots
 
-*Add screenshots here showing the app in action*
+![Rust Trader Banner](screenshots/screenshot-1.png)
 
 ## How It Works
 
