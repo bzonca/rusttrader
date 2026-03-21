@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/vending-data/route.js": {
+      "maxDuration": 30
+    }
+  }
+}
