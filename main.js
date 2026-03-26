@@ -44,8 +44,8 @@ async function fetchCorrosionHourMap() {
       // Typically: Display Name, Short Name, Item ID, Category
       if (cells.length >= 3) {
         const possibleId = cells.find(cell => /^-?\d+$/.test(cell));
-        const possibleName = cells.find(cell => cell.length > 2 && !(/^-?\d+$/.test(cell)) && !cell.includes('.'));
-        const possibleShort = cells.find(cell => cell.includes('.') || (cell.length > 2 && cell !== possibleName));
+        const possibleName = cells.find(cell => cell.length > 2 && !(/^-?\d+$/.test(cell)) && (!cell.includes('.') || cell.includes(' ')));
+        const possibleShort = cells.find(cell => (cell.includes('.') && !cell.includes(' ')) || (cell.length > 2 && cell !== possibleName && !(/^-?\d+$/.test(cell))));
         
         if (possibleId && possibleName) {
           map[possibleId] = { 
@@ -91,7 +91,12 @@ async function fetchCorrosionHourMap() {
     if (Object.keys(map).length === 0) {
       throw new Error('Could not parse item table from Corrosion Hour');
     }
-    
+
+    // Verify known items parsed correctly
+    if (!map['-1211166256']) {
+      console.warn('[ITEMS] Warning: 5.56 Rifle Ammo (-1211166256) not found after parsing - possible format change');
+    }
+
     return map;
   } catch (error) {
     console.error('[ITEMS] Failed to fetch from Corrosion Hour:', error);
@@ -130,7 +135,12 @@ async function loadItemMap() {
       "-1581843485": { name: "Stones", short: "stones" },
       "-151838493": { name: "Sulfur", short: "sulfur" },
       "-2099697608": { name: "Cloth", short: "cloth" },
-      "1103488722": { name: "Leather", short: "leather" }
+      "1103488722": { name: "Leather", short: "leather" },
+      "-1211166256": { name: "5.56 Rifle Ammo", short: "ammo.rifle" },
+      "785728077": { name: "Pistol Bullet", short: "ammo.pistol" },
+      "1578894260": { name: "Shotgun Slug", short: "ammo.shotgun.slug" },
+      "-1685290200": { name: "Incendiary 5.56 Rifle Ammo", short: "ammo.rifle.incendiary" },
+      "-1035059994": { name: "Explosive 5.56 Rifle Ammo", short: "ammo.rifle.explosive" }
     };
   }
 }
